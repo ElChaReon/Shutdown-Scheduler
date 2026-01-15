@@ -18,6 +18,7 @@ SAVE_PATH = os.path.join(os.getenv("APPDATA") or os.path.expanduser("~"), "Shutd
 os.makedirs(os.path.dirname(SAVE_PATH), exist_ok=True)
 # Use the per-user SAVE_PATH (avoids hard-coded user paths)
 STORAGE_FILE = SAVE_PATH
+CONFIG_FILE = os.path.join(os.path.dirname(SAVE_PATH), "config.json")
 SIMULATE_SHUTDOWN = False  # Set to False for real shutdowns (⚠️)
 # ----------------------------
 
@@ -38,12 +39,15 @@ class SchedulerApp(ctk.CTk):
         # Internal data
         self.schedules = {}
         self.timers = {}
+        self.config = {}
+        self.start_with_windows = False
         self.icon = None
 
         # Build UI
         self.create_ui()
 
-        # Load schedules
+        # Load config and schedules
+        self.load_config()
         self.load_schedules()
         self.restore_timers()
         self.refresh_list_for_selected_day()
@@ -67,6 +71,10 @@ class SchedulerApp(ctk.CTk):
 
         btn_add = ctk.CTkButton(left_frame, text="Add shutdown for selected day", command=self.open_time_popup)
         btn_add.grid(row=2, column=0, pady=10)
+
+        self.startup_var = tk.BooleanVar(value=self.start_with_windows)
+        self.startup_checkbox = ctk.CTkCheckBox(left_frame, text="Start with Windows", variable=self.startup_var, command=self.toggle_startup)
+        self.startup_checkbox.grid(row=3, column=0, pady=10)
 
         right_frame = ctk.CTkFrame(self, corner_radius=8)
         right_frame.grid(row=0, column=1, padx=12, pady=12, sticky="nsew")
@@ -128,6 +136,56 @@ class SchedulerApp(ctk.CTk):
             self.status.configure(text="Schedules saved.")
         except Exception as e:
             messagebox.showwarning("Save error", f"Failed to save schedules: {e}")
+
+    def load_config(self):
+        if os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                    self.config = json.load(f)
+            except Exception:
+                self.config = {}
+        else:
+            self.config = {}
+        self.start_with_windows = self.config.get("start_with_windows", False)
+        self.startup_var.set(self.start_with_windows)
+
+    def save_config(self):
+        try:
+            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.config, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            messagebox.showwarning("Save error", f"Failed to save config: {e}")
+
+    def toggle_startup(self):
+        self.start_with_windows = self.startup_var.get()
+        self.config["start_with_windows"] = self.start_with_windows
+        self.save_config()
+        if self.start_with_windows:
+            self.enable_startup()
+        else:
+            self.disable_startup()
+
+    def enable_startup(self):
+        startup_dir = os.path.join(os.getenv('APPDATA'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup')
+        bat_path = os.path.join(startup_dir, "ShutdownScheduler.bat")
+        if getattr(sys, 'frozen', False):
+            bat_content = f'"{sys.executable}"\n'
+        else:
+            bat_content = f'"{sys.executable}" "{os.path.abspath(__file__)}"\n'
+        try:
+            with open(bat_path, 'w') as f:
+                f.write(bat_content)
+        except Exception as e:
+            messagebox.showwarning("Error", f"Failed to enable startup: {e}")
+
+    def disable_startup(self):
+        startup_dir = os.path.join(os.getenv('APPDATA'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup')
+        bat_path = os.path.join(startup_dir, "ShutdownScheduler.bat")
+        try:
+            if os.path.exists(bat_path):
+                os.remove(bat_path)
+        except Exception as e:
+            messagebox.showwarning("Error", f"Failed to disable startup: {e}")
 
     # ---------- UI helpers ----------
     def refresh_list_for_selected_day(self):

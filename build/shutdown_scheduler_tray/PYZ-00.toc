@@ -1,4 +1,5 @@
-('C:\\Users\\leon3\\Documents\\GODSPEED\\Scripts\\py\\p2\\build\\shutdown_scheduler_tray\\PYZ-00.pyz',
+('C:\\Users\\leon3\\Documents\\GODSPEED\\Scripts\\py\\Shutdown '
+ 'Scheduler\\build\\shutdown_scheduler_tray\\PYZ-00.pyz',
  [('PIL',
    'C:\\Program Files\\Python313\\Lib\\site-packages\\PIL\\__init__.py',
    'PYMODULE'),
