@@ -1,5 +1,5 @@
 # Shutdown Scheduler
-It is a simple app for scheduling and managing shutdowns for windows.
+<h3>It is a simple app for scheduling and managing shutdowns for windows.</h3>
 
 <h3>When starting the app, windows smartscreen warns you because it is unsigned so pay it no mind.</h3>
 
