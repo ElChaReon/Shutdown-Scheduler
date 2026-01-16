@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import subprocess
+import shutil
 from PIL import Image, ImageDraw
 import pystray
 import time
@@ -48,6 +49,12 @@ class SchedulerApp(ctk.CTk):
 
         # Load config and schedules
         self.load_config()
+        # Check if startup shortcut exists and sync checkbox
+        startup_dir = os.path.join(os.getenv('APPDATA'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup')
+        lnk_path = os.path.join(startup_dir, "ShutdownScheduler.lnk")
+        self.start_with_windows = os.path.exists(lnk_path)
+        self.startup_var.set(self.start_with_windows)
+        self.save_config()  # Sync config with actual state
         self.load_schedules()
         self.restore_timers()
         self.refresh_list_for_selected_day()
@@ -167,23 +174,37 @@ class SchedulerApp(ctk.CTk):
 
     def enable_startup(self):
         startup_dir = os.path.join(os.getenv('APPDATA'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup')
-        bat_path = os.path.join(startup_dir, "ShutdownScheduler.bat")
+        lnk_path = os.path.join(startup_dir, "ShutdownScheduler.lnk")
         if getattr(sys, 'frozen', False):
-            bat_content = f'"{sys.executable}"\n'
+            target = sys.executable
+            args = ""
         else:
-            bat_content = f'"{sys.executable}" "{os.path.abspath(__file__)}"\n'
+            exe_path = os.path.join(os.path.dirname(__file__), 'dist', 'shutdown_scheduler_tray.exe')
+            if os.path.exists(exe_path):
+                target = exe_path
+                args = ""
+            else:
+                messagebox.showwarning("Error", "Executable not found. Please build the .exe first using PyInstaller.")
+                self.startup_var.set(False)
+                self.start_with_windows = False
+                self.save_config()
+                return
+        # Use PowerShell to create shortcut
+        ps_command = f"$WshShell = New-Object -comObject WScript.Shell; $Shortcut = $WshShell.CreateShortcut('{lnk_path}'); $Shortcut.TargetPath = '{target}'; $Shortcut.Arguments = '{args}'; $Shortcut.WorkingDirectory = '{os.path.dirname(os.path.abspath(__file__))}'; $Shortcut.WindowStyle = 7; $Shortcut.Save()"
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = subprocess.SW_HIDE
         try:
-            with open(bat_path, 'w') as f:
-                f.write(bat_content)
-        except Exception as e:
-            messagebox.showwarning("Error", f"Failed to enable startup: {e}")
+            result = subprocess.run(["powershell", "-Command", ps_command], capture_output=True, text=True, check=True, startupinfo=startupinfo)
+        except subprocess.CalledProcessError as e:
+            messagebox.showwarning("Error", f"Failed to enable startup: {e.stderr}")
 
     def disable_startup(self):
         startup_dir = os.path.join(os.getenv('APPDATA'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup')
-        bat_path = os.path.join(startup_dir, "ShutdownScheduler.bat")
+        lnk_path = os.path.join(startup_dir, "ShutdownScheduler.lnk")
         try:
-            if os.path.exists(bat_path):
-                os.remove(bat_path)
+            if os.path.exists(lnk_path):
+                os.remove(lnk_path)
         except Exception as e:
             messagebox.showwarning("Error", f"Failed to disable startup: {e}")
 
