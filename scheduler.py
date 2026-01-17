@@ -1,10 +1,38 @@
 import threading
-import time
 import sys
 import subprocess
 from datetime import datetime, timedelta
 from tkinter import messagebox
 from config import SIMULATE_SHUTDOWN
+
+def _calculate_next_occurrence(current_dt, repeat_days):
+    """
+    Calculate the next occurrence based on repeat_days.
+    repeat_days: list of weekday ints (0=Mon, 6=Sun)
+    If empty, repeat daily.
+    """
+    if not repeat_days:
+        # Repeat daily
+        next_dt = current_dt + timedelta(days=1)
+        return next_dt
+
+    # Find next day that matches repeat_days
+    current_weekday = current_dt.weekday()  # 0=Mon, 6=Sun
+    days_ahead = []
+    for day in repeat_days:
+        if day > current_weekday:
+            days_ahead.append(day - current_weekday)
+        elif day == current_weekday:
+            # Same day, but time has passed, so next week
+            days_ahead.append(7)
+        else:
+            days_ahead.append(7 + day - current_weekday)
+
+    if days_ahead:
+        min_days = min(days_ahead)
+        next_dt = current_dt + timedelta(days=min_days)
+        return next_dt
+    return None
 
 def schedule_timer_for(app, sid):
     # cancel existing timer if present
@@ -69,7 +97,20 @@ def _timer_fired(app, sid):
         except Exception as e:
             print("Failed to execute shutdown:", e)
 
-    # After running, we remove the schedule automatically.
+    # After running, check if repeat
+    if info.get("repeat", False):
+        # Reschedule for next occurrence
+        dt = datetime.fromisoformat(when)
+        next_dt = _calculate_next_occurrence(dt, info.get("repeat_days", []))
+        if next_dt:
+            info["when"] = next_dt.isoformat()
+            from persistence import save_schedules
+            save_schedules(app)
+            schedule_timer_for(app, sid)
+            app.after(0, lambda: app.status.configure(text=f"Rescheduled {sid[:8]} for {next_dt}"))
+            return  # Don't remove the schedule
+
+    # If not repeating, remove the schedule
     try:
         del app.schedules[sid]
     except KeyError:
@@ -92,11 +133,25 @@ def restore_timers(app):
                 schedule_timer_for(app, sid)
                 count += 1
             else:
-                # past items: remove or keep? We'll remove past items by default.
-                try:
-                    del app.schedules[sid]
-                except KeyError:
-                    pass
+                # past items: if repeating, reschedule; else remove
+                if info.get("repeat", False):
+                    next_dt = _calculate_next_occurrence(dt, info.get("repeat_days", []))
+                    if next_dt:
+                        info["when"] = next_dt.isoformat()
+                        schedule_timer_for(app, sid)
+                        count += 1
+                    else:
+                        # No next occurrence, remove
+                        try:
+                            del app.schedules[sid]
+                        except KeyError:
+                            pass
+                else:
+                    # Not repeating, remove past items
+                    try:
+                        del app.schedules[sid]
+                    except KeyError:
+                        pass
     from persistence import save_schedules
     save_schedules(app)
     print(f"[Scheduler] Restored {count} timers.")

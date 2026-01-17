@@ -26,7 +26,9 @@ def load_schedules(app):
                         "id": sid,
                         "when": dt.isoformat(),
                         "label": item.get("label", ""),
-                        "enabled": item.get("enabled", True)
+                        "enabled": item.get("enabled", True),
+                        "repeat": item.get("repeat", False),
+                        "repeat_days": item.get("repeat_days", [])
                     }
             app.status.configure(text=f"Loaded {len(app.schedules)} scheduled shutdown(s).")
         except Exception as e:

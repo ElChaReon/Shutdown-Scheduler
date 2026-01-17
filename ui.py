@@ -113,7 +113,16 @@ class SchedulerApp(ctk.CTk):
         for dt, sid, info in items:
             enabled_mark = "✅" if info.get("enabled", True) else "⛔"
             label = info.get("label", "")
-            display = f"{enabled_mark} {dt.strftime('%H:%M:%S')}  — {label}  (id={sid[:8]})"
+            repeat_info = ""
+            if info.get("repeat", False):
+                days = info.get("repeat_days", [])
+                if days:
+                    day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+                    day_str = ", ".join([day_names[d] for d in days])
+                    repeat_info = f" [Repeat: {day_str}]"
+                else:
+                    repeat_info = " [Repeat daily]"
+            display = f"{enabled_mark} {dt.strftime('%H:%M:%S')}  — {label}{repeat_info}  (id={sid[:8]})"
             self.listbox.insert(tk.END, display)
 
     def get_selected_schedule_id(self):
@@ -138,13 +147,15 @@ class SchedulerApp(ctk.CTk):
         popup = TimePopup(self, date_str, self.add_shutdown)
         popup.grab_set()
 
-    def add_shutdown(self, iso_when, label="Scheduled shutdown"):
+    def add_shutdown(self, iso_when, label="Scheduled shutdown", repeat=False, repeat_days=[]):
         sid = str(uuid.uuid4())
         self.schedules[sid] = {
             "id": sid,
             "when": iso_when,
             "label": label,
-            "enabled": True
+            "enabled": True,
+            "repeat": repeat,
+            "repeat_days": repeat_days
         }
         save_schedules(self)
         schedule_timer_for(self, sid)
@@ -219,14 +230,14 @@ class SchedulerApp(ctk.CTk):
                     messagebox.showwarning("Error", f"Failed to run shutdown: {e}")
 
 
-class TimePopup(tk.Toplevel):
+class TimePopup(ctk.CTkToplevel):
     def __init__(self, parent, date_str, callback):
         super().__init__(parent)
         self.parent = parent
         self.callback = callback
         self.date_str = date_str  # yyyy-mm-dd
         self.title(f"Pick time for {date_str}")
-        self.geometry("300x200")
+        self.geometry("500x400")
         self.resizable(False, False)
 
         lbl = ctk.CTkLabel(self, text=f"Select time for {date_str}")
@@ -236,16 +247,16 @@ class TimePopup(tk.Toplevel):
         frame.pack(padx=12, pady=6, fill="x")
 
         # Hours/Minutes/Seconds spinboxes
-        inner = tk.Frame(frame)
+        inner = ctk.CTkFrame(frame)
         inner.pack(pady=8)
 
-        tk.Label(inner, text="Hour").grid(row=0, column=0, padx=6)
-        tk.Label(inner, text="Min").grid(row=0, column=1, padx=6)
-        tk.Label(inner, text="Sec").grid(row=0, column=2, padx=6)
+        ctk.CTkLabel(inner, text="Hour").grid(row=0, column=0, padx=6)
+        ctk.CTkLabel(inner, text="Min").grid(row=0, column=1, padx=6)
+        ctk.CTkLabel(inner, text="Sec").grid(row=0, column=2, padx=6)
 
-        self.hour_var = tk.StringVar(value="12")
-        self.min_var = tk.StringVar(value="00")
-        self.sec_var = tk.StringVar(value="00")
+        self.hour_var = ctk.StringVar(value="12")
+        self.min_var = ctk.StringVar(value="00")
+        self.sec_var = ctk.StringVar(value="00")
 
         self.hour_sb = tk.Spinbox(inner, from_=0, to=23, wrap=True, width=4, textvariable=self.hour_var, format="%02.0f")
         self.hour_sb.grid(row=1, column=0, padx=6)
@@ -254,16 +265,48 @@ class TimePopup(tk.Toplevel):
         self.sec_sb = tk.Spinbox(inner, from_=0, to=59, wrap=True, width=4, textvariable=self.sec_var, format="%02.0f")
         self.sec_sb.grid(row=1, column=2, padx=6)
 
+        # Repeat checkbox
+        self.repeat_var = tk.BooleanVar(value=False)
+        self.repeat_cb = ctk.CTkCheckBox(frame, text="Repeat weekly", variable=self.repeat_var, command=self.toggle_repeat)
+        self.repeat_cb.pack(pady=(6,4))
+
+        # Days selection frame - using CustomTkinter frame for consistency
+        self.days_frame = ctk.CTkFrame(frame, corner_radius=4)
+        # Don't pack initially - will be packed in toggle_repeat when needed
+        
+        days_label = ctk.CTkLabel(self.days_frame, text="Repeat on:")
+        days_label.pack(pady=(8,4))
+        
+        # Days checkboxes in a grid layout
+        self.day_vars = {}
+        days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        
+        # Create a frame for the checkboxes to arrange them properly
+        checkboxes_frame = ctk.CTkFrame(self.days_frame, fg_color="transparent")
+        checkboxes_frame.pack(pady=(0,8))
+        
+        for i, day in enumerate(days):
+            var = tk.BooleanVar(value=False)
+            self.day_vars[i] = var  # 0=Mon, 6=Sun
+            cb = ctk.CTkCheckBox(checkboxes_frame, text=day, variable=var, width=60)
+            cb.grid(row=0, column=i, padx=2, pady=2)
+
         # Label input
         self.label_entry = ctk.CTkEntry(self, placeholder_text="Label (optional)")
         self.label_entry.pack(fill="x", padx=12, pady=(6,8))
 
-        btn_frame = tk.Frame(self)
+        btn_frame = ctk.CTkFrame(self)
         btn_frame.pack(pady=6)
         ok = ctk.CTkButton(btn_frame, text="Add", command=self.on_add)
         ok.grid(row=0, column=0, padx=6)
         cancel = ctk.CTkButton(btn_frame, text="Cancel", command=self.destroy)
         cancel.grid(row=0, column=1, padx=6)
+
+    def toggle_repeat(self):
+        if self.repeat_var.get():
+            self.days_frame.pack(pady=4, fill="x", padx=8)
+        else:
+            self.days_frame.pack_forget()
 
     def on_add(self):
         try:
@@ -276,7 +319,9 @@ class TimePopup(tk.Toplevel):
                     return
             iso = dt.isoformat()
             label = self.label_entry.get().strip() or "Scheduled shutdown"
-            self.callback(iso, label)
+            repeat = self.repeat_var.get()
+            repeat_days = [i for i, var in self.day_vars.items() if var.get()] if repeat else []
+            self.callback(iso, label, repeat, repeat_days)
             self.destroy()
         except Exception as e:
             messagebox.showwarning("Invalid", f"Invalid time: {e}")
