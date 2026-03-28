@@ -99,13 +99,30 @@ class SchedulerApp(ctk.CTk):
     def refresh_list_for_selected_day(self):
         selected = self.calendar.get_date()  # yyyy-mm-dd
         # compile items for that day
-        date_start = datetime.fromisoformat(selected + "T00:00:00")
-        date_end = date_start + timedelta(days=1)
+        selected_date = datetime.fromisoformat(selected + "T00:00:00")
+        selected_weekday = selected_date.weekday()  # 0=Mon, 6=Sun
+        
         items = []
         for sid, info in self.schedules.items():
             dt = datetime.fromisoformat(info["when"])
-            if date_start <= dt < date_end:
-                items.append((dt, sid, info))
+            
+            # Check if this is a repeating shutdown
+            if info.get("repeat", False):
+                repeat_days = info.get("repeat_days", [])
+                # For repeating shutdowns, check if selected day matches
+                if not repeat_days:  # Daily repeat
+                    items.append((dt, sid, info))
+                elif selected_weekday in repeat_days:
+                    # Create a display datetime for the selected day at the same time
+                    display_dt = selected_date.replace(hour=dt.hour, minute=dt.minute, second=dt.second)
+                    items.append((display_dt, sid, info))
+            else:
+                # For non-repeating, only show on the actual scheduled date
+                date_start = selected_date
+                date_end = date_start + timedelta(days=1)
+                if date_start <= dt < date_end:
+                    items.append((dt, sid, info))
+        
         # sort by time
         items.sort(key=lambda x: x[0])
         # refresh listbox
