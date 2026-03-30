@@ -34,7 +34,26 @@ def _calculate_next_occurrence(current_dt, repeat_days):
         return next_dt
     return None
 
-def schedule_timer_for(app, sid):
+def get_next_scheduled_datetime(info):
+    """Return the next run datetime for this schedule info."""
+    if not info:
+        return None
+    try:
+        dt = datetime.fromisoformat(info["when"])
+    except Exception:
+        return None
+
+    if info.get("repeat", False):
+        now = datetime.now()
+        if dt > now:
+            return dt
+        next_dt = _calculate_next_occurrence(dt, info.get("repeat_days", []))
+        return next_dt
+
+    return dt
+
+
+def schedule_timer_for(app, sid, allow_immediate_for_past=False):
     # cancel existing timer if present
     if sid in app.timers:
         try:
@@ -53,9 +72,37 @@ def schedule_timer_for(app, sid):
     dt = datetime.fromisoformat(info["when"])
     now = datetime.now()
     delay = (dt - now).total_seconds()
+
     if delay <= 0:
-        # past time: run immediately (simulate) or skip? We'll run immediately.
-        delay = 0.1
+        if info.get("repeat", False):
+            # Move past repeated schedule forward to next valid future occurrence
+            next_dt = _calculate_next_occurrence(dt, info.get("repeat_days", []))
+            if next_dt:
+                info["when"] = next_dt.isoformat()
+                from persistence import save_schedules
+                save_schedules(app)
+                dt = next_dt
+                delay = (dt - now).total_seconds()
+                if delay <= 0:
+                    delay = 0.1
+                print(f"[Scheduler] Past scheduled time for {sid[:8]}, rescheduled to next occurrence {dt}")
+            else:
+                print(f"[Scheduler] No next repeat occurrence for {sid[:8]}, not scheduling")
+                return
+        else:
+            if allow_immediate_for_past:
+                delay = 0.1
+            else:
+                # For non-repeat stale schedules, do not trigger immediate shutdown when re-enabled
+                print(f"[Scheduler] One-time schedule {sid[:8]} is in the past and has been skipped")
+                # Optionally remove stale one-shot schedule
+                try:
+                    del app.schedules[sid]
+                except KeyError:
+                    pass
+                from persistence import save_schedules
+                save_schedules(app)
+                return
 
     timer = threading.Timer(delay, _timer_fired, args=(app, sid))
     timer.daemon = True

@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import uuid
 import os
 from persistence import load_schedules, save_schedules, load_config, save_config, toggle_startup
-from scheduler import schedule_timer_for, restore_timers
+from scheduler import schedule_timer_for, restore_timers, get_next_scheduled_datetime
 from tray import create_tray_icon, hide_window, show_window, exit_app
 
 ctk.set_appearance_mode("System")
@@ -62,6 +62,11 @@ class SchedulerApp(ctk.CTk):
         self.calendar = Calendar(left_frame, selectmode="day", date_pattern="yyyy-mm-dd")
         self.calendar.grid(row=1, column=0, padx=10, pady=6)
 
+        # Highlight current day explicitly
+        today = datetime.now().date()
+        self.calendar.tag_config('today_tag', background='#8B0000', foreground='white')
+        self.calendar.calevent_create(today, 'Today', 'today_tag')
+
         btn_add = ctk.CTkButton(left_frame, text="Add shutdown for selected day", command=self.open_time_popup)
         btn_add.grid(row=2, column=0, pady=10)
 
@@ -88,7 +93,7 @@ class SchedulerApp(ctk.CTk):
 
         ctk.CTkButton(btn_frame, text="Enable/Disable", command=self.toggle_selected).grid(row=0, column=0, padx=4)
         ctk.CTkButton(btn_frame, text="Remove", fg_color="#b22222", hover_color="#ff3333", command=self.remove_selected).grid(row=0, column=1, padx=4)
-        ctk.CTkButton(btn_frame, text="Run Now", command=self.run_now_selected).grid(row=0, column=2, padx=4)
+        ctk.CTkButton(btn_frame, text="Next scheduled", command=self.show_next_scheduled).grid(row=0, column=2, padx=4)
 
         self.status = ctk.CTkLabel(self, text="Ready", anchor="w")
         self.status.grid(row=1, column=0, columnspan=2, sticky="ew", padx=12, pady=(0,8))
@@ -103,7 +108,16 @@ class SchedulerApp(ctk.CTk):
         selected_weekday = selected_date.weekday()  # 0=Mon, 6=Sun
         
         items = []
+        now = datetime.now()
         for sid, info in self.schedules.items():
+            next_dt = get_next_scheduled_datetime(info)
+            if next_dt and next_dt <= now:
+                continue  # Skip schedules with no future occurrences
+            
+            # On past dates, don't show repeating schedules
+            if selected_date.date() < now.date() and info.get("repeat", False):
+                continue
+            
             dt = datetime.fromisoformat(info["when"])
             
             # Check if this is a repeating shutdown
@@ -139,6 +153,7 @@ class SchedulerApp(ctk.CTk):
                     repeat_info = f" [Repeat: {day_str}]"
                 else:
                     repeat_info = " [Repeat daily]"
+
             display = f"{enabled_mark} {dt.strftime('%H:%M:%S')}  — {label}{repeat_info}  (id={sid[:8]})"
             self.listbox.insert(tk.END, display)
 
@@ -175,7 +190,8 @@ class SchedulerApp(ctk.CTk):
             "repeat_days": repeat_days
         }
         save_schedules(self)
-        schedule_timer_for(self, sid)
+        # allow immediate execution if user added a past one-shot and asked for it
+        schedule_timer_for(self, sid, allow_immediate_for_past=True)
         self.refresh_list_for_selected_day()
 
     # ---------- Controls for selected ----------
@@ -189,7 +205,7 @@ class SchedulerApp(ctk.CTk):
             return
         info["enabled"] = not info.get("enabled", True)
         if info["enabled"]:
-            schedule_timer_for(self, sid)
+            schedule_timer_for(self, sid, allow_immediate_for_past=False)
         else:
             # cancel timer
             if sid in self.timers:
@@ -221,30 +237,31 @@ class SchedulerApp(ctk.CTk):
             save_schedules(self)
             self.refresh_list_for_selected_day()
 
-    def run_now_selected(self):
-        sid = self.get_selected_schedule_id()
-        if not sid:
-            messagebox.showinfo("Select", "Select an item to run now.")
+    def show_next_scheduled(self):
+        now = datetime.now()
+        best = None
+        best_sid = None
+        for sid, info in self.schedules.items():
+            if not info.get("enabled", True):
+                continue
+            next_dt = get_next_scheduled_datetime(info)
+            if not next_dt or next_dt < now:
+                continue
+            if best is None or next_dt < best:
+                best = next_dt
+                best_sid = sid
+
+        if not best:
+            messagebox.showinfo("Next scheduled", "No upcoming enabled schedules found.")
             return
-        # run the same code as fired timer (but from main thread)
-        if messagebox.askyesno("Run now", "Execute the selected shutdown now (simulated if SIMULATE_SHUTDOWN=True)?"):
-            # perform simulation directly
-            info = self.schedules.get(sid)
-            when = info.get("when")
-            label = info.get("label", "")
-            from config import SIMULATE_SHUTDOWN
-            if SIMULATE_SHUTDOWN:
-                messagebox.showinfo("Simulated", f"Simulated shutdown executed:\n{label}\n{when}")
-            else:
-                import sys
-                import subprocess
-                try:
-                    if sys.platform.startswith("win"):
-                        subprocess.run(["shutdown","/s","/t","0"], check=False)
-                    elif sys.platform.startswith("linux") or sys.platform.startswith("darwin"):
-                        subprocess.run(["shutdown", "-h", "now"], check=False)
-                except Exception as e:
-                    messagebox.showwarning("Error", f"Failed to run shutdown: {e}")
+
+        info = self.schedules.get(best_sid)
+        label = info.get("label", "")
+        repeat_info = "" if not info.get("repeat", False) else " (repeating)"
+        messagebox.showinfo(
+            "Next scheduled",
+            f"Next schedule:\n{best.strftime('%Y-%m-%d %H:%M:%S')}\n{label}{repeat_info}\nID: {best_sid[:8]}"
+        )
 
 
 class TimePopup(ctk.CTkToplevel):
